@@ -1,12 +1,25 @@
 // app/dashboard/layout.tsx
 
 import Link from "next/link";
+import { createClient } from "@/lib/supabase/server";
+import { redirect } from "next/navigation";
+import LogoutButton from "@/app/dashboard/logout-button"
 
-export default function DashboardLayout({
+export default async function DashboardLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const supabase = await createClient();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  
+  if (!user) {
+    redirect("/login");
+  }
+
   return (
     <div className="min-h-screen bg-zinc-950 text-white">
       {/* Desktop Sidebar */}
@@ -25,6 +38,7 @@ export default function DashboardLayout({
           <NavItem href="/dashboard/invoices" label="Invoices" />
           <NavItem href="/dashboard/analytics" label="Analytics" />
           <NavItem href="/dashboard/settings" label="Settings" />
+          <LogoutButton />
         </nav>
 
         <div className="absolute bottom-5 left-5 right-5">

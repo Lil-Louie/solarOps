@@ -11,8 +11,8 @@ export default async function JobDetailsPage({
   const supabase = await createClient();
 
   const { data: job, error } = await supabase
-    .from("jobs")
-    .select(`
+  .from("jobs")
+  .select(`
     *,
     customers (
       first_name,
@@ -36,14 +36,32 @@ export default async function JobDetailsPage({
       outgoing_tds,
       flow_rate,
       gallons_used
+    ),
+    job_costs (
+      labor_rate,
+      labor_cost,
+      vehicle_mpg,
+      gas_price,
+      gas_cost,
+      resin_cost_per_gallon,
+      resin_cost,
+      total_cost,
+      estimated_profit
     )
   `)
-    .eq("id", id)
-    .single();
+  .eq("id", id)
+  .single();
 
   if (error || !job) {
     notFound();
   }
+
+  // Get business settings for cost calculations
+  const { data: settings } = await supabase
+    .from("settings")
+    .select("*")
+    .limit(1)
+    .single();
 
   async function startJob() {
     "use server";
@@ -70,15 +88,28 @@ export default async function JobDetailsPage({
   
     const supabase = await createClient();
   
-    const finalPrice = formData.get("final_price") as string;
-    const milesDriven = formData.get("miles_driven") as string;
+    const finalPriceInput = formData.get("final_price") as string;
+    const milesDrivenInput = formData.get("miles_driven") as string;
   
     const incomingTds = formData.get("incoming_tds") as string;
     const outgoingTds = formData.get("outgoing_tds") as string;
-    const flowRate = formData.get("flow_rate") as string;
+    const flowRateInput = formData.get("flow_rate") as string;
   
     const finishTime = new Date();
   
+    const finalPrice = finalPriceInput
+      ? Number(finalPriceInput)
+      : 0;
+  
+    const milesDriven = milesDrivenInput
+      ? Number(milesDrivenInput)
+      : 0;
+  
+    const flowRate = flowRateInput
+      ? Number(flowRateInput)
+      : 0;
+  
+    // Get job start time
     const { data: currentJob, error: jobFetchError } = await supabase
       .from("jobs")
       .select("start_time")
@@ -89,26 +120,79 @@ export default async function JobDetailsPage({
       throw new Error(jobFetchError.message);
     }
   
-    let gallonsUsed: number | null = null;
+    // Get current business settings
+    const { data: currentSettings, error: settingsError } =
+      await supabase
+        .from("settings")
+        .select("*")
+        .limit(1)
+        .single();
   
-    if (currentJob.start_time && flowRate) {
+    if (settingsError) {
+      throw new Error(settingsError.message);
+    }
+  
+    const laborRate = Number(
+      currentSettings?.labor_rate ?? 40
+    );
+  
+    const vehicleMpg = Number(
+      currentSettings?.vehicle_mpg ?? 0
+    );
+  
+    const gasPrice = Number(
+      currentSettings?.gas_price ?? 0
+    );
+  
+    const resinCostPerGallon = Number(
+      currentSettings?.resin_cost_per_gallon ?? 0
+    );
+  
+    let durationMinutes = 0;
+    let gallonsUsed = 0;
+  
+    if (currentJob.start_time) {
       const startTime = new Date(currentJob.start_time);
   
-      const durationMinutes =
+      durationMinutes =
         (finishTime.getTime() - startTime.getTime()) /
         1000 /
         60;
-  
-      gallonsUsed = durationMinutes * Number(flowRate);
     }
   
+    if (flowRate > 0) {
+      gallonsUsed = durationMinutes * flowRate;
+    }
+  
+    // Calculate costs
+    const laborCost =
+      (durationMinutes / 60) * laborRate;
+  
+    const gasCost =
+      vehicleMpg > 0
+        ? (milesDriven / vehicleMpg) * gasPrice
+        : 0;
+  
+    const resinCost =
+      gallonsUsed * resinCostPerGallon;
+  
+    const totalCost =
+      laborCost +
+      gasCost +
+      resinCost;
+  
+    const estimatedProfit =
+      finalPrice -
+      totalCost;
+  
+    // Update job
     const { error: jobError } = await supabase
       .from("jobs")
       .update({
         status: "completed",
         finish_time: finishTime.toISOString(),
-        final_price: finalPrice ? Number(finalPrice) : null,
-        miles_driven: milesDriven ? Number(milesDriven) : null,
+        final_price: finalPrice,
+        miles_driven: milesDriven,
       })
       .eq("id", id);
   
@@ -116,13 +200,18 @@ export default async function JobDetailsPage({
       throw new Error(jobError.message);
     }
   
+    // Save water data
     const { error: waterError } = await supabase
       .from("water_readings")
       .insert({
         job_id: id,
-        incoming_tds: incomingTds ? Number(incomingTds) : null,
-        outgoing_tds: outgoingTds ? Number(outgoingTds) : null,
-        flow_rate: flowRate ? Number(flowRate) : null,
+        incoming_tds: incomingTds
+          ? Number(incomingTds)
+          : null,
+        outgoing_tds: outgoingTds
+          ? Number(outgoingTds)
+          : null,
+        flow_rate: flowRate || null,
         gallons_used: gallonsUsed,
       });
   
@@ -130,9 +219,37 @@ export default async function JobDetailsPage({
       throw new Error(waterError.message);
     }
   
-    redirect(`/dashboard/jobs/${id}`);
+    // Save the exact costs used for this job
+    const { error: costError } = await supabase
+      .from("job_costs")
+      .upsert(
+        {
+          job_id: id,
+  
+          labor_rate: laborRate,
+          labor_cost: laborCost,
+  
+          vehicle_mpg: vehicleMpg,
+          gas_price: gasPrice,
+          gas_cost: gasCost,
+  
+          resin_cost_per_gallon: resinCostPerGallon,
+          resin_cost: resinCost,
+  
+          total_cost: totalCost,
+          estimated_profit: estimatedProfit,
+        },
+        {
+          onConflict: "job_id",
+        }
+      );
+  
+    if (costError) {
+      throw new Error(costError.message);
     }
-
+  
+    redirect(`/dashboard/jobs/${id}`);
+  }
 
   const startTime = job.start_time
     ? new Date(job.start_time)
@@ -146,17 +263,100 @@ export default async function JobDetailsPage({
 
   if (startTime && finishTime) {
     durationMinutes = Math.round(
-      (finishTime.getTime() - startTime.getTime()) / 1000 / 60
+      (finishTime.getTime() - startTime.getTime()) /
+        1000 /
+        60
     );
   }
 
   const waterReading = job.water_readings?.[0];
+  const savedCosts = job.job_costs?.[0];
+
+  // Business settings
+  const laborRate = Number(
+    savedCosts?.labor_rate ??
+    settings?.labor_rate ??
+    40
+  );
+  
+  const vehicleMpg = Number(
+    savedCosts?.vehicle_mpg ??
+    settings?.vehicle_mpg ??
+    0
+  );
+  
+  const gasPrice = Number(
+    savedCosts?.gas_price ??
+    settings?.gas_price ??
+    0
+  );
+  
+  const resinCostPerGallon = Number(
+    savedCosts?.resin_cost_per_gallon ??
+    settings?.resin_cost_per_gallon ??
+    0
+  );
+  
+  const finalPrice = Number(
+    job.final_price ??
+    job.quoted_price ??
+    0
+  );
+  
+  const milesDriven = Number(
+    job.miles_driven ?? 0
+  );
+  
+  const gallonsUsed = Number(
+    waterReading?.gallons_used ?? 0
+  );
+  
+  const calculatedLaborCost =
+    durationMinutes !== null
+      ? (durationMinutes / 60) * laborRate
+      : 0;
+  
+  const calculatedGasCost =
+    vehicleMpg > 0
+      ? (milesDriven / vehicleMpg) * gasPrice
+      : 0;
+  
+  const calculatedResinCost =
+    gallonsUsed * resinCostPerGallon;
+  
+  const laborCost = Number(
+    savedCosts?.labor_cost ??
+    calculatedLaborCost
+  );
+  
+  const gasCost = Number(
+    savedCosts?.gas_cost ??
+    calculatedGasCost
+  );
+  
+  const resinCost = Number(
+    savedCosts?.resin_cost ??
+    calculatedResinCost
+  );
+  
+  const totalCost = Number(
+    savedCosts?.total_cost ??
+    laborCost + gasCost + resinCost
+  );
+  
+  const estimatedProfit = Number(
+    savedCosts?.estimated_profit ??
+    finalPrice - totalCost
+  );
 
   return (
     <div className="mx-auto max-w-5xl">
+      {/* Header */}
       <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-sm text-zinc-500">Job</p>
+          <p className="text-sm text-zinc-500">
+            Job
+          </p>
 
           <h1 className="mt-1 text-3xl font-bold">
             {job.customers?.first_name}{" "}
@@ -175,7 +375,9 @@ export default async function JobDetailsPage({
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
+        {/* Left column */}
         <div className="space-y-6 lg:col-span-2">
+          {/* Customer */}
           <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
             <h2 className="text-lg font-semibold">
               Customer
@@ -184,16 +386,21 @@ export default async function JobDetailsPage({
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
               <Detail
                 label="Phone"
-                value={job.customers?.phone}
+                value={
+                  job.customers?.phone
+                }
               />
 
               <Detail
                 label="Email"
-                value={job.customers?.email}
+                value={
+                  job.customers?.email
+                }
               />
             </div>
           </section>
 
+          {/* Property */}
           <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
             <h2 className="text-lg font-semibold">
               Property
@@ -204,7 +411,9 @@ export default async function JobDetailsPage({
                 label="Address"
                 value={`${job.properties?.street ?? ""}, ${
                   job.properties?.city ?? ""
-                }, ${job.properties?.state ?? ""} ${
+                }, ${
+                  job.properties?.state ?? ""
+                } ${
                   job.properties?.zip ?? ""
                 }`}
               />
@@ -212,8 +421,12 @@ export default async function JobDetailsPage({
               <Detail
                 label="Panels"
                 value={
-                  job.properties?.panel_count
-                    ? String(job.properties.panel_count)
+                  job.properties
+                    ?.panel_count
+                    ? String(
+                        job.properties
+                          .panel_count
+                      )
                     : null
                 }
               />
@@ -222,19 +435,26 @@ export default async function JobDetailsPage({
                 label="Stories"
                 value={
                   job.properties?.stories
-                    ? String(job.properties.stories)
+                    ? String(
+                        job.properties
+                          .stories
+                      )
                     : null
                 }
               />
 
               <Detail
                 label="Roof Type"
-                value={job.properties?.roof_type}
+                value={
+                  job.properties?.roof_type
+                }
               />
 
               <Detail
                 label="Roof Pitch"
-                value={job.properties?.roof_pitch}
+                value={
+                  job.properties?.roof_pitch
+                }
               />
             </div>
 
@@ -251,6 +471,7 @@ export default async function JobDetailsPage({
             )}
           </section>
 
+          {/* Job details */}
           <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
             <h2 className="text-lg font-semibold">
               Job Details
@@ -259,14 +480,19 @@ export default async function JobDetailsPage({
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
               <Detail
                 label="Scheduled Date"
-                value={job.scheduled_date}
+                value={
+                  job.scheduled_date
+                }
               />
 
               <Detail
                 label="Scheduled Time"
                 value={
                   job.scheduled_time
-                    ? job.scheduled_time.slice(0, 5)
+                    ? job.scheduled_time.slice(
+                        0,
+                        5
+                      )
                     : null
                 }
               />
@@ -275,7 +501,9 @@ export default async function JobDetailsPage({
                 label="Quoted Price"
                 value={
                   job.quoted_price
-                    ? `$${Number(job.quoted_price).toFixed(2)}`
+                    ? `$${Number(
+                        job.quoted_price
+                      ).toFixed(2)}`
                     : null
                 }
               />
@@ -284,7 +512,9 @@ export default async function JobDetailsPage({
                 label="Final Price"
                 value={
                   job.final_price
-                    ? `$${Number(job.final_price).toFixed(2)}`
+                    ? `$${Number(
+                        job.final_price
+                      ).toFixed(2)}`
                     : null
                 }
               />
@@ -302,16 +532,159 @@ export default async function JobDetailsPage({
               </div>
             )}
           </section>
+
+          {/* Completed job analytics */}
+          {job.status ===
+            "completed" && (
+            <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+              <h2 className="text-lg font-semibold">
+                Job Summary
+              </h2>
+
+              <div className="mt-6 grid gap-6 md:grid-cols-2">
+                {/* Water */}
+                <div>
+                  <h3 className="mb-4 font-semibold">
+                    Water Data
+                  </h3>
+
+                  <div className="space-y-4">
+                    <Detail
+                      label="Incoming TDS"
+                      value={
+                        waterReading?.incoming_tds !==
+                          null &&
+                        waterReading?.incoming_tds !==
+                          undefined
+                          ? `${waterReading.incoming_tds} ppm`
+                          : null
+                      }
+                    />
+
+                    <Detail
+                      label="Output TDS"
+                      value={
+                        waterReading?.outgoing_tds !==
+                          null &&
+                        waterReading?.outgoing_tds !==
+                          undefined
+                          ? `${waterReading.outgoing_tds} ppm`
+                          : null
+                      }
+                    />
+
+                    <Detail
+                      label="Flow Rate"
+                      value={
+                        waterReading?.flow_rate !==
+                          null &&
+                        waterReading?.flow_rate !==
+                          undefined
+                          ? `${waterReading.flow_rate} GPM`
+                          : null
+                      }
+                    />
+
+                    <Detail
+                      label="Water Used"
+                      value={
+                        waterReading?.gallons_used !==
+                          null &&
+                        waterReading?.gallons_used !==
+                          undefined
+                          ? `${Number(
+                              waterReading.gallons_used
+                            ).toFixed(
+                              1
+                            )} gallons`
+                          : null
+                      }
+                    />
+                  </div>
+                </div>
+
+                {/* Costs */}
+                <div>
+                  <h3 className="mb-4 font-semibold">
+                    Profitability
+                  </h3>
+
+                  <div className="space-y-3">
+                    <CostRow
+                      label="Revenue"
+                      value={
+                        finalPrice
+                      }
+                    />
+
+                    <CostRow
+                      label="Labor"
+                      value={
+                        laborCost
+                      }
+                      negative
+                    />
+
+                    <CostRow
+                      label="Gas"
+                      value={gasCost}
+                      negative
+                    />
+
+                    <CostRow
+                      label="DI Resin"
+                      value={
+                        resinCost
+                      }
+                      negative
+                    />
+
+                    <div className="border-t border-zinc-800 pt-3">
+                      <CostRow
+                        label="Total Cost"
+                        value={
+                          totalCost
+                        }
+                        negative
+                      />
+                    </div>
+
+                    <div className="border-t border-zinc-800 pt-4">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold">
+                          Estimated
+                          Profit
+                        </span>
+
+                        <span className="text-xl font-bold">
+                          $
+                          {estimatedProfit.toFixed(
+                            2
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
         </div>
 
+        {/* Right column */}
         <div className="space-y-6">
+          {/* Job Status */}
           <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
             <h2 className="text-lg font-semibold">
               Job Status
             </h2>
 
-            {job.status === "scheduled" && (
-              <form action={startJob} className="mt-5">
+            {job.status ===
+              "scheduled" && (
+              <form
+                action={startJob}
+                className="mt-5"
+              >
                 <button
                   type="submit"
                   className="w-full rounded-xl bg-white px-5 py-4 font-semibold text-black hover:bg-zinc-200"
@@ -321,132 +694,144 @@ export default async function JobDetailsPage({
               </form>
             )}
 
-            {job.status === "in_progress" && (
-            <form
+            {job.status ===
+              "in_progress" && (
+              <form
                 action={completeJob}
                 className="mt-5 space-y-5"
-            >
+              >
                 <div className="border-b border-zinc-800 pb-5">
-                <h3 className="font-semibold">Water Data</h3>
+                  <h3 className="font-semibold">
+                    Water Data
+                  </h3>
 
-                <p className="mt-1 text-sm text-zinc-500">
-                    Record your water quality and flow.
-                </p>
+                  <p className="mt-1 text-sm text-zinc-500">
+                    Record water
+                    quality and flow.
+                  </p>
                 </div>
 
+                {/* Incoming TDS */}
                 <div>
-                <label className="mb-2 block text-sm font-medium">
+                  <label className="mb-2 block text-sm font-medium">
                     Incoming TDS
-                </label>
+                  </label>
 
-                <div className="relative">
+                  <div className="relative">
                     <input
-                    type="number"
-                    name="incoming_tds"
-                    min="0"
-                    step="0.1"
-                    placeholder="327"
-                    className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 pr-16"
+                      type="number"
+                      name="incoming_tds"
+                      min="0"
+                      step="0.1"
+                      placeholder="327"
+                      className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 pr-16"
                     />
 
                     <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-zinc-500">
-                    ppm
+                      ppm
                     </span>
-                </div>
+                  </div>
                 </div>
 
+                {/* Output TDS */}
                 <div>
-                <label className="mb-2 block text-sm font-medium">
+                  <label className="mb-2 block text-sm font-medium">
                     Output TDS
-                </label>
+                  </label>
 
-                <div className="relative">
+                  <div className="relative">
                     <input
-                    type="number"
-                    name="outgoing_tds"
-                    min="0"
-                    step="0.1"
-                    placeholder="0"
-                    className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 pr-16"
+                      type="number"
+                      name="outgoing_tds"
+                      min="0"
+                      step="0.1"
+                      placeholder="0"
+                      className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 pr-16"
                     />
 
                     <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-zinc-500">
-                    ppm
+                      ppm
                     </span>
-                </div>
+                  </div>
                 </div>
 
+                {/* Flow */}
                 <div>
-                <label className="mb-2 block text-sm font-medium">
+                  <label className="mb-2 block text-sm font-medium">
                     Flow Rate
-                </label>
+                  </label>
 
-                <div className="relative">
+                  <div className="relative">
                     <input
-                    type="number"
-                    name="flow_rate"
-                    min="0"
-                    step="0.01"
-                    placeholder="0.82"
-                    className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 pr-20"
+                      type="number"
+                      name="flow_rate"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.82"
+                      className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 pr-20"
                     />
 
                     <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-zinc-500">
-                    GPM
+                      GPM
                     </span>
-                </div>
+                  </div>
                 </div>
 
+                {/* Final price */}
                 <div className="border-t border-zinc-800 pt-5">
-                <label className="mb-2 block text-sm font-medium">
+                  <label className="mb-2 block text-sm font-medium">
                     Final Price
-                </label>
+                  </label>
 
-                <div className="relative">
+                  <div className="relative">
                     <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500">
-                    $
+                      $
                     </span>
 
                     <input
-                    type="number"
-                    name="final_price"
-                    min="0"
-                    step="0.01"
-                    defaultValue={
+                      type="number"
+                      name="final_price"
+                      min="0"
+                      step="0.01"
+                      defaultValue={
                         job.quoted_price
-                        ? Number(job.quoted_price)
-                        : ""
-                    }
-                    className="w-full rounded-xl border border-zinc-700 bg-zinc-950 py-3 pl-8 pr-4"
+                          ? Number(
+                              job.quoted_price
+                            )
+                          : ""
+                      }
+                      className="w-full rounded-xl border border-zinc-700 bg-zinc-950 py-3 pl-8 pr-4"
                     />
-                </div>
+                  </div>
                 </div>
 
+                {/* Mileage */}
                 <div>
-                <label className="mb-2 block text-sm font-medium">
+                  <label className="mb-2 block text-sm font-medium">
                     Miles Driven
-                </label>
+                  </label>
 
-                <input
+                  <input
                     type="number"
                     name="miles_driven"
                     min="0"
                     step="0.1"
                     placeholder="8.4"
                     className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3"
-                />
+                  />
                 </div>
 
                 <button
-                type="submit"
-                className="w-full rounded-xl bg-white px-5 py-4 font-semibold text-black hover:bg-zinc-200"
+                  type="submit"
+                  className="w-full rounded-xl bg-white px-5 py-4 font-semibold text-black hover:bg-zinc-200"
                 >
-                Complete Job
+                  Complete Job
                 </button>
-            </form>
+              </form>
             )}
 
-            {job.status === "completed" && (
+            {job.status ===
+              "completed" && (
               <div className="mt-5 space-y-4">
                 <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
                   <p className="text-sm text-zinc-500">
@@ -458,7 +843,8 @@ export default async function JobDetailsPage({
                   </p>
                 </div>
 
-                {durationMinutes !== null && (
+                {durationMinutes !==
+                  null && (
                   <Detail
                     label="Cleaning Time"
                     value={`${durationMinutes} minutes`}
@@ -484,6 +870,7 @@ export default async function JobDetailsPage({
             )}
           </section>
 
+          {/* Timing */}
           <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
             <h2 className="text-lg font-semibold">
               Timing
@@ -494,10 +881,14 @@ export default async function JobDetailsPage({
                 label="Started"
                 value={
                   startTime
-                    ? startTime.toLocaleTimeString([], {
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })
+                    ? startTime.toLocaleTimeString(
+                        [],
+                        {
+                          hour: "numeric",
+                          minute:
+                            "2-digit",
+                        }
+                      )
                     : null
                 }
               />
@@ -506,10 +897,14 @@ export default async function JobDetailsPage({
                 label="Finished"
                 value={
                   finishTime
-                    ? finishTime.toLocaleTimeString([], {
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })
+                    ? finishTime.toLocaleTimeString(
+                        [],
+                        {
+                          hour: "numeric",
+                          minute:
+                            "2-digit",
+                        }
+                      )
                     : null
                 }
               />
@@ -517,7 +912,8 @@ export default async function JobDetailsPage({
               <Detail
                 label="Duration"
                 value={
-                  durationMinutes !== null
+                  durationMinutes !==
+                  null
                     ? `${durationMinutes} min`
                     : null
                 }
@@ -535,7 +931,10 @@ function Detail({
   value,
 }: {
   label: string;
-  value: string | null | undefined;
+  value:
+    | string
+    | null
+    | undefined;
 }) {
   return (
     <div>
@@ -546,6 +945,29 @@ function Detail({
       <p className="mt-1 font-medium">
         {value || "Not provided"}
       </p>
+    </div>
+  );
+}
+
+function CostRow({
+  label,
+  value,
+  negative = false,
+}: {
+  label: string;
+  value: number;
+  negative?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-sm text-zinc-400">
+        {label}
+      </span>
+
+      <span className="font-medium">
+        {negative ? "-" : ""}
+        ${value.toFixed(2)}
+      </span>
     </div>
   );
 }
