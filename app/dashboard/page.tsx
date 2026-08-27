@@ -1,25 +1,50 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ date?: string }>;
+}) {
   const supabase = await createClient();
 
+  const params = await searchParams;
+
+  // Actual current local date
   const today = new Date();
 
-  const todayString = [
-    today.getFullYear(),
-    String(today.getMonth() + 1).padStart(2, "0"),
-    String(today.getDate()).padStart(2, "0"),
-  ].join("-");
+  const actualTodayString = formatDateForDatabase(today);
 
+  // Date currently being viewed
+  const selectedDateString =
+    params.date ?? actualTodayString;
+
+  const selectedDate = parseLocalDate(
+    selectedDateString
+  );
+
+  // Previous / next day navigation
+  const previousDate = new Date(selectedDate);
+  previousDate.setDate(previousDate.getDate() - 1);
+
+  const nextDate = new Date(selectedDate);
+  nextDate.setDate(nextDate.getDate() + 1);
+
+  const previousDateString =
+    formatDateForDatabase(previousDate);
+
+  const nextDateString =
+    formatDateForDatabase(nextDate);
+
+  // Monthly stats always use the actual current month
   const firstDayOfMonth = [
     today.getFullYear(),
     String(today.getMonth() + 1).padStart(2, "0"),
     "01",
   ].join("-");
-  
-  // Today's jobs
-  const { data: todaysJobs } = await supabase
+
+  // Jobs for selected date
+  const { data: selectedJobs } = await supabase
     .from("jobs")
     .select(`
       *,
@@ -36,13 +61,13 @@ export default async function DashboardPage() {
         estimated_profit
       )
     `)
-    .eq("scheduled_date", todayString)
+    .eq("scheduled_date", selectedDateString)
     .neq("status", "cancelled")
     .order("scheduled_time", {
       ascending: true,
     });
 
-  // All jobs this month
+  // Completed jobs this month
   const { data: monthlyJobs } = await supabase
     .from("jobs")
     .select(`
@@ -56,34 +81,46 @@ export default async function DashboardPage() {
       )
     `)
     .gte("scheduled_date", firstDayOfMonth)
-    .lte("scheduled_date", todayString)
+    .lte("scheduled_date", actualTodayString)
     .neq("status", "cancelled");
 
-  const jobsToday = todaysJobs?.length ?? 0;
+  /*
+   * Selected day stats
+   */
 
-  const panelsToday =
-    todaysJobs?.reduce((total, job) => {
-      return (
-        total +
-        Number(job.properties?.panel_count ?? 0)
-      );
-    }, 0) ?? 0;
+  const jobsForSelectedDay =
+    selectedJobs?.length ?? 0;
 
-  const expectedRevenue =
-    todaysJobs?.reduce((total, job) => {
-      const price = Number(
-        job.final_price ??
-          job.quoted_price ??
-          0
-      );
-
-      return total + price;
-    }, 0) ?? 0;
-
-  const completedToday =
-    todaysJobs?.filter(
+  const completedForSelectedDay =
+    selectedJobs?.filter(
       (job) => job.status === "completed"
     ).length ?? 0;
+
+  const panelsForSelectedDay =
+    selectedJobs?.reduce((total, job) => {
+      return (
+        total +
+        Number(
+          job.properties?.panel_count ?? 0
+        )
+      );
+    }, 0) ?? 0;
+
+  const revenueForSelectedDay =
+    selectedJobs?.reduce((total, job) => {
+      return (
+        total +
+        Number(
+          job.final_price ??
+            job.quoted_price ??
+            0
+        )
+      );
+    }, 0) ?? 0;
+
+  /*
+   * Monthly stats
+   */
 
   const completedMonthlyJobs =
     monthlyJobs?.filter(
@@ -152,6 +189,9 @@ export default async function DashboardPage() {
         completedMonthlyJobs.length
       : 0;
 
+  const isViewingToday =
+    selectedDateString === actualTodayString;
+
   return (
     <div>
       {/* Header */}
@@ -165,47 +205,85 @@ export default async function DashboardPage() {
         </p>
       </div>
 
-      {/* Today's Stats */}
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Today's Jobs"
-          value={String(jobsToday)}
-          subtitle={`${completedToday} completed`}
-        />
+      {!isViewingToday && (
+            <div className="mb-3 text-center">
+              <Link
+                href="/dashboard"
+                className="text-xs font-medium text-zinc-500 transition hover:text-white"
+              >
+                Back to Today
+              </Link>
+            </div>
+          )}
 
-        <StatCard
-          title="Expected Revenue"
-          value={`$${expectedRevenue.toFixed(
-            2
-          )}`}
-          subtitle="Scheduled today"
-        />
+      {/* Selected Date Stats */}
+      <section className="rounded-2xl border border-zinc-800 bg-zinc-900 px-5 py-1">
+        {/* Date Navigation */}
+        <div className="">
+          <div className="grid grid-cols-3 items-center px-2">
+            <Link
+              href={`/dashboard?date=${previousDateString}`}
+              aria-label="Previous day"
+              className="flex items-center justify-start rounded-full px-4 py-2 text-2xl text-zinc-400 transition hover:bg-zinc-800 hover:text-white"
+            >
+              «
+            </Link>
 
-        <StatCard
-          title="Panels"
-          value={String(panelsToday)}
-          subtitle="Scheduled today"
-        />
+            <div className="text-center">
+              <p className="text-base font-semibold text-white sm:text-lg">
+                {selectedDate.toLocaleDateString("en-US", {
+                  weekday: "short",
+                  month: "short",
+                  day: "numeric",
+                })}
+              </p>
+            </div>
 
-        <StatCard
-          title="Completed"
-          value={`${completedToday}/${jobsToday}`}
-          subtitle="Jobs today"
-        />
+            <Link
+              href={`/dashboard?date=${nextDateString}`}
+              aria-label="Next day"
+              className="flex items-center justify-end rounded-full px-4 py-2 text-2xl text-zinc-400 transition hover:bg-zinc-800 hover:text-white"
+            >
+              »
+            </Link>
+          </div>
+        </div>
+
+        {/* Stats */}
+        <div className="grid grid-cols-3 divide-x divide-zinc-800">
+          <DashboardStat
+            label="Jobs"
+            value={`${completedForSelectedDay}/${jobsForSelectedDay}`}
+          />
+
+          <DashboardStat
+            label="Revenue"
+            value={`$${revenueForSelectedDay.toFixed(
+              0
+            )}`}
+          />
+
+          <DashboardStat
+            label="Panels"
+            value={String(
+              panelsForSelectedDay
+            )}
+          />
+        </div>
       </section>
 
-      <div className="mt-8 grid gap-6 xl:grid-cols-3">
-        {/* Today's Jobs */}
+      <div className="mt-6 grid gap-6 xl:grid-cols-3">
+        {/* Selected Day Jobs */}
         <section className="xl:col-span-2">
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900">
             <div className="flex items-center justify-between border-b border-zinc-800 p-5">
               <div>
                 <h2 className="text-lg font-semibold">
-                  Today's Jobs
+                  Jobs
                 </h2>
 
                 <p className="mt-1 text-sm text-zinc-500">
-                  {today.toLocaleDateString(
+                  {selectedDate.toLocaleDateString(
                     "en-US",
                     {
                       weekday: "long",
@@ -224,11 +302,11 @@ export default async function DashboardPage() {
               </Link>
             </div>
 
-            {!todaysJobs ||
-            todaysJobs.length === 0 ? (
+            {!selectedJobs ||
+            selectedJobs.length === 0 ? (
               <div className="p-8 text-center">
                 <p className="text-zinc-400">
-                  No jobs scheduled today.
+                  No jobs scheduled for this day.
                 </p>
 
                 <Link
@@ -240,7 +318,7 @@ export default async function DashboardPage() {
               </div>
             ) : (
               <div className="divide-y divide-zinc-800">
-                {todaysJobs.map((job) => (
+                {selectedJobs.map((job) => (
                   <JobRow
                     key={job.id}
                     id={job.id}
@@ -283,24 +361,17 @@ export default async function DashboardPage() {
               Quick Actions
             </h2>
 
-            <div className="mt-5 space-y-3">
-              <Link
-                href="/dashboard/jobs/new"
-                className="block w-full rounded-xl bg-white px-4 py-3 font-semibold text-black transition hover:bg-zinc-200"
-              >
-                + Schedule New Job
-              </Link>
-
+            <div className="mt-5 grid grid-cols-2 gap-3">
               <Link
                 href="/dashboard/customers/new"
-                className="block w-full rounded-xl border border-zinc-700 px-4 py-3 text-sm transition hover:bg-zinc-800"
+                className="rounded-xl border border-zinc-700 px-4 py-3 text-center text-sm transition hover:bg-zinc-800"
               >
-                + Add Customer
+                + Customer
               </Link>
 
               <Link
                 href="/dashboard/invoices"
-                className="block w-full rounded-xl border border-zinc-700 px-4 py-3 text-sm transition hover:bg-zinc-800"
+                className="rounded-xl border border-zinc-700 px-4 py-3 text-center text-sm transition hover:bg-zinc-800"
               >
                 Invoices
               </Link>
@@ -361,27 +432,21 @@ export default async function DashboardPage() {
   );
 }
 
-function StatCard({
-  title,
+function DashboardStat({
+  label,
   value,
-  subtitle,
 }: {
-  title: string;
+  label: string;
   value: string;
-  subtitle: string;
 }) {
   return (
-    <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
-      <p className="text-sm text-zinc-400">
-        {title}
+    <div className="px-3 text-center sm:px-6">
+      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 sm:text-sm">
+        {label}
       </p>
 
-      <p className="mt-3 text-3xl font-bold">
+      <p className="mt-2 text-2xl font-bold tracking-tight text-white sm:text-3xl lg:text-4xl">
         {value}
-      </p>
-
-      <p className="mt-2 text-xs text-zinc-500">
-        {subtitle}
       </p>
     </div>
   );
@@ -424,7 +489,9 @@ function JobRow({
 
           <div className="mt-2 flex flex-wrap gap-3 text-xs text-zinc-400">
             <span>{panels} panels</span>
+
             <span>•</span>
+
             <span>
               ${price.toFixed(2)}
             </span>
@@ -469,7 +536,8 @@ function MiniStat({
 }
 
 function formatTime(time: string) {
-  const [hours, minutes] = time.split(":");
+  const [hours, minutes] =
+    time.split(":");
 
   const date = new Date();
 
@@ -486,5 +554,37 @@ function formatTime(time: string) {
       hour: "numeric",
       minute: "2-digit",
     }
+  );
+}
+
+function formatDateForDatabase(
+  date: Date
+) {
+  return [
+    date.getFullYear(),
+    String(
+      date.getMonth() + 1
+    ).padStart(2, "0"),
+    String(
+      date.getDate()
+    ).padStart(2, "0"),
+  ].join("-");
+}
+
+function parseLocalDate(
+  dateString: string
+) {
+  const [year, month, day] =
+    dateString
+      .split("-")
+      .map(Number);
+
+  return new Date(
+    year,
+    month - 1,
+    day,
+    12,
+    0,
+    0
   );
 }
