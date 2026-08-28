@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
+import Link from "next/link";
 
 export default async function CustomerDetailsPage({
   params,
@@ -27,12 +28,32 @@ export default async function CustomerDetailsPage({
 
   return (
     <div className="mx-auto max-w-4xl">
-      <div className="mb-8">
-        <p className="text-sm text-zinc-500">Customer</p>
+      <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm text-zinc-500">
+            Customer
+          </p>
 
-        <h1 className="mt-1 text-3xl font-bold">
-          {customer.first_name} {customer.last_name}
-        </h1>
+          <h1 className="mt-1 text-3xl font-bold">
+            {customer.first_name} {customer.last_name}
+          </h1>
+        </div>
+
+        <div className="flex flex-wrap gap-3">
+          <Link
+            href={`/dashboard/customers/${customer.id}/edit`}
+            className="w-fit rounded-xl border border-zinc-700 px-4 py-3 text-sm font-semibold transition hover:bg-zinc-800"
+          >
+            Edit Customer
+          </Link>
+
+          <Link
+            href={`/dashboard/jobs/new?customer=${customer.id}`}
+            className="w-fit rounded-xl bg-white px-4 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200"
+          >
+            + Schedule Job
+          </Link>
+        </div>
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">

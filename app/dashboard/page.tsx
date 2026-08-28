@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import JobSection from "@/app/dashboard/JobSection";
 
 export default async function DashboardPage({
   searchParams,
@@ -69,20 +70,23 @@ export default async function DashboardPage({
 
   // Completed jobs this month
   const { data: monthlyJobs } = await supabase
-    .from("jobs")
-    .select(`
-      *,
-      properties (
-        panel_count
-      ),
-      job_costs (
-        total_cost,
-        estimated_profit
-      )
-    `)
-    .gte("scheduled_date", firstDayOfMonth)
-    .lte("scheduled_date", actualTodayString)
-    .neq("status", "cancelled");
+  .from("jobs")
+  .select(`
+    *,
+    properties (
+      panel_count
+    ),
+    job_costs (
+      labor_cost,
+      gas_cost,
+      resin_cost,
+      total_cost,
+      estimated_profit
+    )
+  `)
+  .gte("scheduled_date", firstDayOfMonth)
+  .lte("scheduled_date", actualTodayString)
+  .neq("status", "cancelled");
 
   /*
    * Selected day stats
@@ -95,6 +99,18 @@ export default async function DashboardPage({
     selectedJobs?.filter(
       (job) => job.status === "completed"
     ).length ?? 0;
+
+    const upcomingJobs =
+    selectedJobs?.filter(
+      (job) =>
+        job.status === "scheduled" ||
+        job.status === "in_progress"
+    ) ?? [];
+
+  const completedJobs =
+    selectedJobs?.filter(
+      (job) => job.status === "completed"
+    ) ?? [];
 
   const panelsForSelectedDay =
     selectedJobs?.reduce((total, job) => {
@@ -141,29 +157,40 @@ export default async function DashboardPage({
       },
       0
     );
-
-  const monthlyCosts =
+    
+    const monthlyCosts =
     completedMonthlyJobs.reduce(
       (total, job) => {
         return (
           total +
           Number(
-            job.job_costs?.[0]?.total_cost ??
-              0
+            job.job_costs?.total_cost ?? 0
           )
         );
       },
       0
     );
-
+  
   const monthlyProfit =
     completedMonthlyJobs.reduce(
       (total, job) => {
         return (
           total +
           Number(
-            job.job_costs?.[0]
-              ?.estimated_profit ?? 0
+            job.job_costs?.estimated_profit ?? 0
+          )
+        );
+      },
+      0
+    );
+  
+  const monthlyLabor =
+    completedMonthlyJobs.reduce(
+      (total, job) => {
+        return (
+          total +
+          Number(
+            job.job_costs?.labor_cost ?? 0
           )
         );
       },
@@ -275,81 +302,99 @@ export default async function DashboardPage({
       <div className="mt-6 grid gap-6 xl:grid-cols-3">
         {/* Selected Day Jobs */}
         <section className="xl:col-span-2">
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-900">
-            <div className="flex items-center justify-between border-b border-zinc-800 p-5">
-              <div>
-                <h2 className="text-lg font-semibold">
-                  Jobs
-                </h2>
+          <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
+            <div className="border-b border-zinc-800 px-5 py-4">
+              <h2 className="text-lg font-semibold">
+                Jobs
+              </h2>
 
-                <p className="mt-1 text-sm text-zinc-500">
-                  {selectedDate.toLocaleDateString(
-                    "en-US",
-                    {
-                      weekday: "long",
-                      month: "long",
-                      day: "numeric",
-                    }
-                  )}
-                </p>
-              </div>
-
-              <Link
-                href="/dashboard/jobs"
-                className="text-sm text-zinc-400 transition hover:text-white"
-              >
-                View all
-              </Link>
+              <p className="mt-1 text-sm text-zinc-500">
+                {selectedDate.toLocaleDateString("en-US", {
+                  weekday: "long",
+                  month: "long",
+                  day: "numeric",
+                })}
+              </p>
             </div>
 
-            {!selectedJobs ||
-            selectedJobs.length === 0 ? (
-              <div className="p-8 text-center">
-                <p className="text-zinc-400">
-                  No jobs scheduled for this day.
+            <JobSection
+              title="Upcoming"
+              count={upcomingJobs.length}
+            >
+              {upcomingJobs.length === 0 ? (
+                <p className="border-t border-zinc-800 px-5 py-5 text-sm text-zinc-500">
+                  No upcoming jobs.
                 </p>
+              ) : (
+                <div className="divide-y divide-zinc-800 border-t border-zinc-800">
+                  {upcomingJobs.map((job) => (
+                    <CompactJobRow
+                      key={job.id}
+                      id={job.id}
+                      time={
+                        job.scheduled_time
+                          ? formatTime(job.scheduled_time)
+                          : "No time"
+                      }
+                      customer={`${job.customers?.first_name ?? ""} ${
+                        job.customers?.last_name ?? ""
+                      }`}
+                      address={
+                        job.properties?.street ?? "No address"
+                      }
+                      panels={Number(
+                        job.properties?.panel_count ?? 0
+                      )}
+                      price={Number(
+                        job.final_price ??
+                          job.quoted_price ??
+                          0
+                      )}
+                    />
+                  ))}
+                </div>
+              )}
+            </JobSection>
 
-                <Link
-                  href="/dashboard/jobs/new"
-                  className="mt-4 inline-block text-sm font-medium text-white underline"
-                >
-                  Schedule a job
-                </Link>
-              </div>
-            ) : (
-              <div className="divide-y divide-zinc-800">
-                {selectedJobs.map((job) => (
-                  <JobRow
-                    key={job.id}
-                    id={job.id}
-                    time={
-                      job.scheduled_time
-                        ? formatTime(
-                            job.scheduled_time
-                          )
-                        : "No time"
-                    }
-                    customer={`${job.customers?.first_name ?? ""} ${
-                      job.customers?.last_name ?? ""
-                    }`}
-                    address={
-                      job.properties?.street ??
-                      "No address"
-                    }
-                    panels={Number(
-                      job.properties
-                        ?.panel_count ?? 0
-                    )}
-                    price={Number(
-                      job.final_price ??
-                        job.quoted_price ??
-                        0
-                    )}
-                    status={job.status}
-                  />
-                ))}
-              </div>
-            )}
+            <JobSection
+              title="Completed"
+              count={completedJobs.length}
+              defaultOpen={false}
+            >
+              {completedJobs.length === 0 ? (
+                <p className="border-t border-zinc-800 px-5 py-5 text-sm text-zinc-500">
+                  No completed jobs.
+                </p>
+              ) : (
+                <div className="divide-y divide-zinc-800 border-t border-zinc-800">
+                  {completedJobs.map((job) => (
+                    <CompactJobRow
+                      key={job.id}
+                      id={job.id}
+                      time={
+                        job.scheduled_time
+                          ? formatTime(job.scheduled_time)
+                          : "No time"
+                      }
+                      customer={`${job.customers?.first_name ?? ""} ${
+                        job.customers?.last_name ?? ""
+                      }`}
+                      address={
+                        job.properties?.street ?? "No address"
+                      }
+                      panels={Number(
+                        job.properties?.panel_count ?? 0
+                      )}
+                      price={Number(
+                        job.final_price ??
+                          job.quoted_price ??
+                          0
+                      )}
+                    />
+                  ))}
+                </div>
+              )}
+            </JobSection>
           </div>
         </section>
 
@@ -400,7 +445,14 @@ export default async function DashboardPage({
               />
 
               <MiniStat
-                label="Costs"
+                label="Labor"
+                value={`$${monthlyLabor.toFixed(
+                  2
+                )}`}
+              />
+
+              <MiniStat
+                label="Material Costs"
                 value={`$${monthlyCosts.toFixed(
                   2
                 )}`}
@@ -452,14 +504,13 @@ function DashboardStat({
   );
 }
 
-function JobRow({
+function CompactJobRow({
   id,
   time,
   customer,
   address,
   panels,
   price,
-  status,
 }: {
   id: string;
   time: string;
@@ -467,51 +518,89 @@ function JobRow({
   address: string;
   panels: number;
   price: number;
-  status: string;
 }) {
   return (
-    <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
-      <div className="flex gap-4">
-        <div className="min-w-20">
-          <p className="font-semibold">
+    <Link
+      href={`/dashboard/jobs/${id}`}
+      className="group block px-5 py-4 transition hover:bg-zinc-800/50"
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="truncate font-semibold text-white">
+            {customer}
+          </p>
+
+          <p className="mt-1 truncate text-sm text-zinc-500">
+            {address}
+          </p>
+        </div>
+
+        <span className="text-xl text-zinc-600 transition group-hover:translate-x-1 group-hover:text-white">
+          ›
+        </span>
+      </div>
+
+      <div className="mt-4 grid grid-cols-3 items-center">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-zinc-600">
+            Time
+          </p>
+
+          <p className="mt-1 text-sm font-medium text-zinc-300">
             {time}
           </p>
         </div>
 
-        <div>
-          <p className="font-semibold">
-            {customer}
+        <div className="text-center">
+          <p className="text-xs uppercase tracking-wide text-zinc-600">
+            Panels
           </p>
 
-          <p className="mt-1 text-sm text-zinc-500">
-            {address}
+          <p className="mt-1 text-sm font-medium text-zinc-300">
+            {panels}
+          </p>
+        </div>
+
+        <div className="text-right">
+          <p className="text-xs uppercase tracking-wide text-zinc-600">
+            Price
           </p>
 
-          <div className="mt-2 flex flex-wrap gap-3 text-xs text-zinc-400">
-            <span>{panels} panels</span>
-
-            <span>•</span>
-
-            <span>
-              ${price.toFixed(2)}
-            </span>
-          </div>
+          <p className="mt-1 text-sm font-semibold text-white">
+            ${price.toFixed(0)}
+          </p>
         </div>
       </div>
+    </Link>
+  );
+}
 
-      <div className="flex items-center gap-3">
-        <span className="w-fit rounded-full border border-zinc-700 px-3 py-1 text-xs capitalize">
-          {status.replace("_", " ")}
-        </span>
 
-        <Link
-          href={`/dashboard/jobs/${id}`}
-          className="rounded-lg border border-zinc-700 px-3 py-2 text-xs font-medium transition hover:bg-zinc-800"
-        >
-          View
-        </Link>
-      </div>
-    </div>
+function StatusBadge({
+  status,
+}: {
+  status: string;
+}) {
+  if (status === "in_progress") {
+    return (
+      <span className="rounded-full border border-zinc-600 px-2.5 py-1 text-xs font-medium text-white">
+        In Progress
+      </span>
+    );
+  }
+
+  if (status === "completed") {
+    return (
+      <span className="rounded-full border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-400">
+        Completed
+      </span>
+    );
+  }
+
+  return (
+    <span className="rounded-full border border-zinc-700 px-2.5 py-1 text-xs font-medium text-zinc-300">
+      Scheduled
+    </span>
   );
 }
 
