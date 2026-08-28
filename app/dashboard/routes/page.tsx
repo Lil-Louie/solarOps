@@ -85,44 +85,51 @@ export default async function RoutesPage({
   }
 
   const routeJobs: RouteJob[] =
-    (jobs ?? [])
-      .map((job) => {
-        const address = [
-          job.properties?.street,
-          job.properties?.city,
-          job.properties?.state,
-          job.properties?.zip,
+  (jobs ?? [])
+    .map((job) => {
+      const property =
+        Array.isArray(job.properties)
+          ? job.properties[0]
+          : job.properties;
+
+      const customer =
+        Array.isArray(job.customers)
+          ? job.customers[0]
+          : job.customers;
+
+      const address = [
+        property?.street,
+        property?.city,
+        property?.state,
+        property?.zip,
+      ]
+        .filter(Boolean)
+        .join(", ");
+
+      return {
+        id: job.id,
+
+        customer: [
+          customer?.first_name,
+          customer?.last_name,
         ]
           .filter(Boolean)
-          .join(", ");
+          .join(" "),
 
-        return {
-          id: job.id,
+        address,
 
-          customer: [
-            job.customers
-              ?.first_name,
-            job.customers
-              ?.last_name,
-          ]
-            .filter(Boolean)
-            .join(" "),
+        panels: Number(
+          property?.panel_count ?? 0
+        ),
 
-          address,
-
-          panels: Number(
-            job.properties
-              ?.panel_count ?? 0
-          ),
-
-          scheduledTime:
-            job.scheduled_time,
-        };
-      })
-      .filter(
-        (job) =>
-          job.address.length > 0
-      );
+        scheduledTime:
+          job.scheduled_time,
+      };
+    })
+    .filter(
+      (job) =>
+        job.address.length > 0
+    );
 
   let optimizedJobs =
     routeJobs;
