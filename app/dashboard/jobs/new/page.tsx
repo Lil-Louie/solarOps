@@ -7,6 +7,7 @@ export default async function NewJobPage({
 }: {
   searchParams: Promise<{
     customer?: string;
+    error?: string;
   }>;
 }) {
   const supabase = await createClient();
@@ -40,7 +41,18 @@ export default async function NewJobPage({
       });
 
   if (error) {
-    throw new Error(error.message);
+    return (
+      <div className="mx-auto max-w-3xl">
+        <h1 className="text-3xl font-bold">
+          Schedule Job
+        </h1>
+
+        <div className="mt-5 rounded-xl border border-red-900/60 bg-red-950/30 px-4 py-3 text-sm text-red-300">
+          Customers could not be loaded.
+          Please refresh and try again.
+        </div>
+      </div>
+    );
   }
 
   async function addJob(
@@ -52,33 +64,141 @@ export default async function NewJobPage({
       await createClient();
 
     const customerId =
-      formData.get(
-        "customer_id"
-      ) as string;
+      String(
+        formData.get(
+          "customer_id"
+        ) ?? ""
+      ).trim();
 
     const scheduledDate =
-      formData.get(
-        "scheduled_date"
-      ) as string;
+      String(
+        formData.get(
+          "scheduled_date"
+        ) ?? ""
+      ).trim();
 
     const scheduledTime =
-      formData.get(
-        "scheduled_time"
-      ) as string;
+      String(
+        formData.get(
+          "scheduled_time"
+        ) ?? ""
+      ).trim();
 
-    const quotedPrice =
-      formData.get(
-        "quoted_price"
-      ) as string;
+    const quotedPriceInput =
+      String(
+        formData.get(
+          "quoted_price"
+        ) ?? ""
+      ).trim();
 
     const notes =
-      formData.get(
-        "notes"
-      ) as string;
+      String(
+        formData.get(
+          "notes"
+        ) ?? ""
+      ).trim();
+
+    function redirectWithError(
+      message: string
+    ): never {
+      const customerParam =
+        customerId
+          ? `&customer=${encodeURIComponent(
+              customerId
+            )}`
+          : "";
+
+      redirect(
+        `/dashboard/jobs/new?error=${encodeURIComponent(
+          message
+        )}${customerParam}`
+      );
+    }
 
     if (!customerId) {
-      throw new Error(
+      redirectWithError(
         "Please select a customer."
+      );
+    }
+
+    if (!scheduledDate) {
+      redirectWithError(
+        "Please choose a date for the job."
+      );
+    }
+
+    const datePattern =
+      /^\d{4}-\d{2}-\d{2}$/;
+
+    if (
+      !datePattern.test(
+        scheduledDate
+      )
+    ) {
+      redirectWithError(
+        "Please enter a valid job date."
+      );
+    }
+
+    const [
+      year,
+      month,
+      day,
+    ] = scheduledDate
+      .split("-")
+      .map(Number);
+
+    const scheduledDateObject =
+      new Date(
+        year,
+        month - 1,
+        day,
+        12
+      );
+
+    const isValidDate =
+      scheduledDateObject.getFullYear() ===
+        year &&
+      scheduledDateObject.getMonth() ===
+        month - 1 &&
+      scheduledDateObject.getDate() ===
+        day;
+
+    if (!isValidDate) {
+      redirectWithError(
+        "Please enter a valid job date."
+      );
+    }
+
+    if (
+      scheduledTime &&
+      !/^([01]\d|2[0-3]):[0-5]\d$/.test(
+        scheduledTime
+      )
+    ) {
+      redirectWithError(
+        "Please enter a valid job time."
+      );
+    }
+
+    const quotedPrice =
+      quotedPriceInput === ""
+        ? null
+        : Number(
+            quotedPriceInput
+          );
+
+    if (
+      quotedPrice !== null &&
+      (
+        !Number.isFinite(
+          quotedPrice
+        ) ||
+        quotedPrice < 0
+      )
+    ) {
+      redirectWithError(
+        "Quoted price must be 0 or greater."
       );
     }
 
@@ -101,13 +221,13 @@ export default async function NewJobPage({
         customerId
       )
       .limit(1)
-      .single();
+      .maybeSingle();
 
     if (
       propertyError ||
       !property
     ) {
-      throw new Error(
+      redirectWithError(
         "This customer does not have a property. Add property information before scheduling a job."
       );
     }
@@ -132,11 +252,7 @@ export default async function NewJobPage({
           null,
 
         quoted_price:
-          quotedPrice
-            ? Number(
-                quotedPrice
-              )
-            : null,
+          quotedPrice,
 
         notes:
           notes || null,
@@ -144,9 +260,12 @@ export default async function NewJobPage({
       .select("id")
       .single();
 
-    if (jobError) {
-      throw new Error(
-        jobError.message
+    if (
+      jobError ||
+      !newJob
+    ) {
+      redirectWithError(
+        "The job could not be scheduled. Please try again."
       );
     }
 
@@ -169,9 +288,15 @@ export default async function NewJobPage({
         </p>
       </div>
 
+      {params.error && (
+        <div className="mb-5 rounded-xl border border-red-900/60 bg-red-950/30 px-4 py-3 text-sm text-red-300">
+          {params.error}
+        </div>
+      )}
+
       <form
         action={addJob}
-        className="space-y-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-6"
+        className="space-y-8 rounded-2xl border border-zinc-800 bg-zinc-900 p-4 sm:p-6"
       >
         {/* Customer */}
         <section>
@@ -190,7 +315,7 @@ export default async function NewJobPage({
               defaultValue={
                 selectedCustomerId
               }
-              className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3"
+              className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 outline-none transition focus:border-zinc-500"
             >
               <option value="">
                 Select customer
@@ -209,6 +334,9 @@ export default async function NewJobPage({
                       }
                       value={
                         customer.id
+                      }
+                      disabled={
+                        !property
                       }
                     >
                       {
@@ -254,7 +382,7 @@ export default async function NewJobPage({
                 type="date"
                 name="scheduled_date"
                 required
-                className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3"
+                className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 outline-none transition focus:border-zinc-500"
               />
             </div>
 
@@ -266,7 +394,7 @@ export default async function NewJobPage({
               <input
                 type="time"
                 name="scheduled_time"
-                className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3"
+                className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 outline-none transition focus:border-zinc-500"
               />
             </div>
           </div>
@@ -295,8 +423,9 @@ export default async function NewJobPage({
                 name="quoted_price"
                 min="0"
                 step="0.01"
+                inputMode="decimal"
                 placeholder="150"
-                className="w-full rounded-xl border border-zinc-700 bg-zinc-950 py-3 pl-8 pr-4"
+                className="w-full rounded-xl border border-zinc-700 bg-zinc-950 py-3 pl-8 pr-4 outline-none transition focus:border-zinc-500"
               />
             </div>
           </div>
@@ -313,9 +442,15 @@ export default async function NewJobPage({
           <textarea
             name="notes"
             rows={4}
+            maxLength={1000}
             placeholder="Customer prefers morning, side gate unlocked, special instructions..."
-            className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3"
+            className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 outline-none transition focus:border-zinc-500"
           />
+
+          <p className="mt-2 text-xs text-zinc-500">
+            Optional. Maximum 1,000
+            characters.
+          </p>
         </section>
 
         {/* Actions */}

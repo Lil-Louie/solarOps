@@ -4,10 +4,16 @@ import { createClient } from "@/lib/supabase/server";
 
 export default async function JobDetailsPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{
+    error?: string;
+    success?: string;
+  }>;
 }) {
   const { id } = await params;
+  const query = await searchParams;
   const supabase = await createClient();
 
   const { data: job, error } = await supabase
@@ -68,6 +74,29 @@ export default async function JobDetailsPage({
 
     const supabase = await createClient();
 
+    const { data: currentJob, error: fetchError } =
+      await supabase
+        .from("jobs")
+        .select("status")
+        .eq("id", id)
+        .single();
+
+    if (fetchError || !currentJob) {
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "Unable to load this job."
+        )}`
+      );
+    }
+
+    if (currentJob.status !== "scheduled") {
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "Only scheduled jobs can be started."
+        )}`
+      );
+    }
+
     const { error } = await supabase
       .from("jobs")
       .update({
@@ -77,39 +106,156 @@ export default async function JobDetailsPage({
       .eq("id", id);
 
     if (error) {
-      throw new Error(error.message);
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "Could not start the job. Please try again."
+        )}`
+      );
     }
 
-    redirect(`/dashboard/jobs/${id}`);
+    redirect(
+      `/dashboard/jobs/${id}?success=${encodeURIComponent(
+        "Job started."
+      )}`
+    );
+  }
+
+
+  async function cancelJob() {
+    "use server";
+
+    const supabase = await createClient();
+
+    const { data: currentJob, error: fetchError } =
+      await supabase
+        .from("jobs")
+        .select("status")
+        .eq("id", id)
+        .single();
+
+    if (fetchError || !currentJob) {
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "Unable to load this job."
+        )}`
+      );
+    }
+
+    if (currentJob.status !== "scheduled") {
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "Only scheduled jobs can be cancelled."
+        )}`
+      );
+    }
+
+    const { error } = await supabase
+      .from("jobs")
+      .update({
+        status: "cancelled",
+      })
+      .eq("id", id);
+
+    if (error) {
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "Could not cancel the job. Please try again."
+        )}`
+      );
+    }
+
+    redirect(
+      `/dashboard/jobs/${id}?success=${encodeURIComponent(
+        "Job cancelled."
+      )}`
+    );
   }
 
 
   async function saveWaterData(formData: FormData) {
     "use server";
-  
+
     const supabase = await createClient();
-  
+
     const incomingTdsInput =
-      formData.get("incoming_tds") as string;
-  
+      String(formData.get("incoming_tds") ?? "").trim();
+
     const outgoingTdsInput =
-      formData.get("outgoing_tds") as string;
-  
+      String(formData.get("outgoing_tds") ?? "").trim();
+
     const flowRateInput =
-      formData.get("flow_rate") as string;
-  
-    const incomingTds = incomingTdsInput
-      ? Number(incomingTdsInput)
-      : null;
-  
-    const outgoingTds = outgoingTdsInput
-      ? Number(outgoingTdsInput)
-      : null;
-  
-    const flowRate = flowRateInput
-      ? Number(flowRateInput)
-      : null;
-  
+      String(formData.get("flow_rate") ?? "").trim();
+
+    const incomingTds =
+      incomingTdsInput === ""
+        ? null
+        : Number(incomingTdsInput);
+
+    const outgoingTds =
+      outgoingTdsInput === ""
+        ? null
+        : Number(outgoingTdsInput);
+
+    const flowRate =
+      flowRateInput === ""
+        ? null
+        : Number(flowRateInput);
+
+    const values = [
+      incomingTds,
+      outgoingTds,
+      flowRate,
+    ];
+
+    if (
+      values.some(
+        (value) =>
+          value !== null &&
+          (!Number.isFinite(value) || value < 0)
+      )
+    ) {
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "Water readings must be valid non-negative numbers."
+        )}`
+      );
+    }
+
+    if (
+      incomingTds === null &&
+      outgoingTds === null &&
+      flowRate === null
+    ) {
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "Enter at least one water reading before saving."
+        )}`
+      );
+    }
+
+    const { data: currentJob, error: jobError } =
+      await supabase
+        .from("jobs")
+        .select("status")
+        .eq("id", id)
+        .single();
+
+    if (jobError || !currentJob) {
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "Unable to load this job."
+        )}`
+      );
+    }
+
+    if (currentJob.status !== "in_progress") {
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "Water data can only be saved while a job is in progress."
+        )}`
+      );
+    }
+
     const { data: existingReading } =
       await supabase
         .from("water_readings")
@@ -117,7 +263,7 @@ export default async function JobDetailsPage({
         .eq("job_id", id)
         .limit(1)
         .maybeSingle();
-  
+
     if (existingReading) {
       const { error } = await supabase
         .from("water_readings")
@@ -127,9 +273,13 @@ export default async function JobDetailsPage({
           flow_rate: flowRate,
         })
         .eq("id", existingReading.id);
-  
+
       if (error) {
-        throw new Error(error.message);
+        redirect(
+          `/dashboard/jobs/${id}?error=${encodeURIComponent(
+            "Could not save water data. Please try again."
+          )}`
+        );
       }
     } else {
       const { error } = await supabase
@@ -140,13 +290,21 @@ export default async function JobDetailsPage({
           outgoing_tds: outgoingTds,
           flow_rate: flowRate,
         });
-  
+
       if (error) {
-        throw new Error(error.message);
+        redirect(
+          `/dashboard/jobs/${id}?error=${encodeURIComponent(
+            "Could not save water data. Please try again."
+          )}`
+        );
       }
     }
-  
-    redirect(`/dashboard/jobs/${id}`);
+
+    redirect(
+      `/dashboard/jobs/${id}?success=${encodeURIComponent(
+        "Water data saved."
+      )}`
+    );
   }
 
 
@@ -155,18 +313,50 @@ export default async function JobDetailsPage({
 
     const supabase = await createClient();
 
-    const finalPriceInput = formData.get("final_price") as string;
-    const milesDrivenInput = formData.get("miles_driven") as string;
+    const finalPriceInput =
+      String(formData.get("final_price") ?? "").trim();
+
+    const milesDrivenInput =
+      String(formData.get("miles_driven") ?? "").trim();
 
     const finishTime = new Date();
 
-    const finalPrice = finalPriceInput
-      ? Number(finalPriceInput)
-      : 0;
+    if (!finalPriceInput) {
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "Final price is required before completing the job."
+        )}`
+      );
+    }
 
-    const milesDriven = milesDrivenInput
-      ? Number(milesDrivenInput)
-      : 0;
+    const finalPrice = Number(finalPriceInput);
+
+    const milesDriven =
+      milesDrivenInput === ""
+        ? 0
+        : Number(milesDrivenInput);
+
+    if (
+      !Number.isFinite(finalPrice) ||
+      finalPrice <= 0
+    ) {
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "Final price must be greater than $0."
+        )}`
+      );
+    }
+
+    if (
+      !Number.isFinite(milesDriven) ||
+      milesDriven < 0
+    ) {
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "Miles driven must be 0 or greater."
+        )}`
+      );
+    }
 
       const {
         data: currentJob,
@@ -183,8 +373,20 @@ export default async function JobDetailsPage({
         .eq("id", id)
         .single();
 
-    if (jobFetchError) {
-      throw new Error(jobFetchError.message);
+    if (jobFetchError || !currentJob) {
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "Unable to load the current job."
+        )}`
+      );
+    }
+
+    if (!currentJob.start_time) {
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "This job has not been started yet."
+        )}`
+      );
     }
 
     const savedWaterReading =
@@ -203,8 +405,12 @@ export default async function JobDetailsPage({
       .limit(1)
       .single();
 
-    if (settingsError) {
-      throw new Error(settingsError.message);
+    if (settingsError || !currentSettings) {
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "Business cost settings could not be loaded."
+        )}`
+      );
     }
 
     const laborRate = Number(
@@ -276,7 +482,11 @@ export default async function JobDetailsPage({
         .eq("id", id);
 
     if (jobError) {
-      throw new Error(jobError.message);
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "Could not complete the job. Please try again."
+        )}`
+      );
     }
 
     if (savedWaterReading?.id) {
@@ -292,8 +502,10 @@ export default async function JobDetailsPage({
           );
     
       if (waterUpdateError) {
-        throw new Error(
-          waterUpdateError.message
+        redirect(
+          `/dashboard/jobs/${id}?error=${encodeURIComponent(
+            "The job was completed, but water usage could not be updated."
+          )}`
         );
       }
     }
@@ -338,10 +550,18 @@ export default async function JobDetailsPage({
         );
 
     if (costError) {
-      throw new Error(costError.message);
+      redirect(
+        `/dashboard/jobs/${id}?error=${encodeURIComponent(
+          "The job was completed, but job costs could not be saved."
+        )}`
+      );
     }
 
-    redirect(`/dashboard/jobs/${id}`);
+    redirect(
+      `/dashboard/jobs/${id}?success=${encodeURIComponent(
+        "Job completed."
+      )}`
+    );
   }
 
   const startTime = job.start_time
@@ -451,55 +671,62 @@ const estimatedProfit = Number(
 
   return (
     <div className="mx-auto max-w-4xl">
+      {query.error && (
+        <div className="mb-5 rounded-xl border border-red-900/60 bg-red-950/30 px-4 py-3 text-sm text-red-300">
+          {query.error}
+        </div>
+      )}
+
+      {query.success && (
+        <div className="mb-5 rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm text-zinc-300">
+          {query.success}
+        </div>
+      )}
+
       {/* Header */}
-      <header className="mb-6">
+      <header className="mb-5 sm:mb-6">
         <div className="min-w-0">
-          <StatusBadge status={job.status} />
 
-          <div className="mt-3 flex items-center justify-between gap-4">
-            <h1 className="min-w-0 truncate text-2xl font-bold sm:text-3xl">
-              {job.customers?.first_name}{" "}
-              {job.customers?.last_name}
-            </h1>
-
-            <div className="flex shrink-0 items-center gap-2">
-              {job.status !== "completed" && (
-                <Link
-                  href={`/dashboard/jobs/${job.id}/edit`}
-                  className="rounded-xl border border-zinc-700 px-3 py-2 text-sm font-medium transition hover:bg-zinc-800 sm:px-4 sm:py-2.5"
-                >
-                  Edit Job
-                </Link>
-              )}
-
-              {job.customers?.id && (
+          <div className="mt-3 flex items-start justify-between gap-4">
+            <div className="w-full min-w-0">
+              <div className="flex justify-between items-center">
+                <h1 className="truncate text-2xl font-bold sm:text-3xl">
+                  {job.customers?.first_name}{" "}
+                  {job.customers?.last_name}
+                </h1>
+                
+                {job.customers?.id && (
                 <Link
                   href={`/dashboard/customers/${job.customers.id}`}
-                  className="rounded-xl border border-zinc-700 px-3 py-2 text-sm font-medium transition hover:bg-zinc-800 sm:px-4 sm:py-2.5"
+                  className="shrink-0 rounded-xl border border-zinc-700 px-3 py-2 text-sm font-medium transition hover:bg-zinc-800 sm:px-4 sm:py-2.5"
                 >
                   View Customer
                 </Link>
               )}
             </div>
+
+              <p className="mt-1 truncate text-sm text-zinc-400 sm:text-base">
+                {job.properties?.street},{" "}
+                {job.properties?.city}
+              </p>
+
+              <p className="mt-1 text-sm text-zinc-500">
+                {job.properties?.panel_count ?? "?"} panels
+                {" • "}
+                {job.properties?.stories ?? "?"} story
+              </p>
+            </div>
+
+
           </div>
 
-          <p className="mt-1 text-zinc-400">
-            {job.properties?.street},{" "}
-            {job.properties?.city}
-          </p>
-
-          <p className="my-2 text-sm text-zinc-500">
-            {job.properties?.panel_count ?? "?"} panels
-            {" • "}
-            {job.properties?.stories ?? "?"} story
-          </p>
         </div>
       </header>
 
       <div className="space-y-6">
         {/* Scheduled */}
         {job.status === "scheduled" && (
-          <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
+          <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 sm:p-5">
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="font-semibold">
@@ -531,7 +758,7 @@ const estimatedProfit = Number(
         {job.status === "in_progress" && (
           <>
             {/* Complete Job */}
-            <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
+            <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 sm:p-5">
               <div>
                 <h2 className="text-lg font-semibold">
                   Job In Progress
@@ -564,8 +791,10 @@ const estimatedProfit = Number(
                       <input
                         type="number"
                         name="final_price"
-                        min="0"
+                        min="0.01"
                         step="0.01"
+                        required
+                        inputMode="decimal"
                         defaultValue={
                           job.quoted_price
                             ? Number(
@@ -589,6 +818,7 @@ const estimatedProfit = Number(
                       name="miles_driven"
                       min="0"
                       step="0.1"
+                      inputMode="decimal"
                       placeholder="8.4"
                       className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 outline-none transition focus:border-zinc-500"
                     />
@@ -605,7 +835,7 @@ const estimatedProfit = Number(
             </section>
 
             {/* Water Data */}
-            <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
+            <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 sm:p-5">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <h2 className="text-lg font-semibold">
@@ -626,7 +856,7 @@ const estimatedProfit = Number(
               </div>
 
               {waterReading ? (
-                <div className="mt-5 grid grid-cols-3 gap-4">
+                <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-3">
                   <Detail
                     label="Incoming TDS"
                     value={
@@ -709,7 +939,7 @@ const estimatedProfit = Number(
         {/* Completed Summary */}
         {job.status ===
           "completed" && (
-          <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
+          <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 sm:p-5">
             <div className="flex flex-col gap-4 border-b border-zinc-800 pb-5 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h2 className="text-lg font-semibold">
@@ -878,10 +1108,25 @@ const estimatedProfit = Number(
         )}
 
         {/* Job Details */}
-        <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
-          <h2 className="text-lg font-semibold">
-            Job Details
-          </h2>
+        <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 sm:p-5">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex justify-between items-center gap-4 sm:gap-2">
+            <h2 className="text-lg font-semibold">
+              Job Details
+            </h2>
+            <StatusBadge status={job.status} />
+            </div>
+
+            {job.status !== "completed" &&
+              job.status !== "cancelled" && (
+                <Link
+                  href={`/dashboard/jobs/${job.id}/edit`}
+                  className="rounded-xl border border-zinc-700 px-3 py-2 text-sm font-medium transition hover:bg-zinc-800"
+                >
+                  Edit
+                </Link>
+              )}
+          </div>
 
           <div className="mt-5 grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-4">
             <Detail
@@ -905,11 +1150,9 @@ const estimatedProfit = Number(
             <Detail
               label="Panels"
               value={
-                job.properties
-                  ?.panel_count
+                job.properties?.panel_count
                   ? String(
-                      job.properties
-                        .panel_count
+                      job.properties.panel_count
                     )
                   : null
               }
@@ -920,8 +1163,7 @@ const estimatedProfit = Number(
               value={
                 job.properties?.stories
                   ? String(
-                      job.properties
-                        .stories
+                      job.properties.stories
                     )
                   : null
               }
@@ -930,16 +1172,14 @@ const estimatedProfit = Number(
             <Detail
               label="Roof"
               value={
-                job.properties
-                  ?.roof_type
+                job.properties?.roof_type
               }
             />
 
             <Detail
               label="Pitch"
               value={
-                job.properties
-                  ?.roof_pitch
+                job.properties?.roof_pitch
               }
             />
 
@@ -993,6 +1233,20 @@ const estimatedProfit = Number(
             </div>
           )}
         </section>
+
+        {job.status === "scheduled" && (
+          <form
+            action={cancelJob}
+            className="flex justify-end"
+          >
+            <button
+              type="submit"
+              className="rounded-xl border border-red-900/60 px-4 py-2.5 text-sm font-medium text-red-400 transition hover:bg-red-950/30"
+            >
+              Cancel Job
+            </button>
+          </form>
+        )}
       </div>
     </div>
   );
@@ -1040,12 +1294,12 @@ function SummaryStat({
   value: string;
 }) {
   return (
-    <div className="rounded-xl bg-zinc-950 p-4">
+    <div className="rounded-xl bg-zinc-950 p-3 sm:p-4">
       <p className="text-xs uppercase tracking-wide text-zinc-500">
         {label}
       </p>
 
-      <p className="mt-2 text-lg font-bold">
+      <p className="mt-1.5 text-base font-bold sm:text-lg">
         {value}
       </p>
     </div>
@@ -1120,6 +1374,7 @@ function FieldWithUnit({
           name={name}
           min="0"
           step={step}
+          inputMode="decimal"
           placeholder={placeholder}
           className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 pr-16 outline-none transition focus:border-zinc-500"
         />

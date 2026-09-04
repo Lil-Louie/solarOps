@@ -42,6 +42,12 @@ export default async function InvoicesPage() {
     1
   );
 
+  /*
+   * Outstanding balance
+   *
+   * Draft + Sent invoices count.
+   * Paid + Cancelled invoices do not.
+   */
   const outstandingBalance =
     invoiceList.reduce(
       (total, invoice) => {
@@ -60,6 +66,9 @@ export default async function InvoicesPage() {
       0
     );
 
+  /*
+   * Money actually paid this month.
+   */
   const paidThisMonth =
     invoiceList.reduce(
       (total, invoice) => {
@@ -160,6 +169,7 @@ export default async function InvoicesPage() {
         </div>
       ) : (
         <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
+          {/* List Header */}
           <div className="border-b border-zinc-800 px-5 py-4">
             <div className="flex items-center justify-between">
               <h2 className="font-semibold">
@@ -172,6 +182,7 @@ export default async function InvoicesPage() {
             </div>
           </div>
 
+          {/* Rows */}
           <div className="divide-y divide-zinc-800">
             {invoiceList.map(
               (invoice) => (
@@ -181,6 +192,7 @@ export default async function InvoicesPage() {
                   className="group block px-5 py-5 transition hover:bg-zinc-800/50"
                 >
                   <div className="flex items-center justify-between gap-4">
+                    {/* Left */}
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-3">
                         <p className="font-semibold">
@@ -208,6 +220,7 @@ export default async function InvoicesPage() {
                       </p>
                     </div>
 
+                    {/* Right */}
                     <div className="flex shrink-0 items-center gap-4">
                       <div className="text-right">
                         <p className="font-semibold">
@@ -218,17 +231,9 @@ export default async function InvoicesPage() {
                         </p>
 
                         <p className="mt-1 text-xs text-zinc-500">
-                          {invoice.status ===
-                            "paid" &&
-                          invoice.paid_at
-                            ? `Paid ${formatShortDate(
-                                invoice.paid_at
-                              )}`
-                            : invoice.due_date
-                            ? `Due ${formatDate(
-                                invoice.due_date
-                              )}`
-                            : ""}
+                          {getInvoiceSecondaryText(
+                            invoice
+                          )}
                         </p>
                       </div>
 
@@ -244,6 +249,7 @@ export default async function InvoicesPage() {
         </div>
       )}
 
+      {/* Draft Reminder */}
       {draftCount > 0 && (
         <p className="mt-4 text-center text-xs text-zinc-600">
           {draftCount} draft{" "}
@@ -295,6 +301,37 @@ function StatusBadge({
       {label}
     </span>
   );
+}
+
+function getInvoiceSecondaryText(
+  invoice: {
+    status: string;
+    paid_at?: string | null;
+    due_date?: string | null;
+  }
+) {
+  if (
+    invoice.status === "paid" &&
+    invoice.paid_at
+  ) {
+    return `Paid ${formatShortDate(
+      invoice.paid_at
+    )}`;
+  }
+
+  if (
+    invoice.status === "cancelled"
+  ) {
+    return "Cancelled";
+  }
+
+  if (invoice.due_date) {
+    return `Due ${formatDate(
+      invoice.due_date
+    )}`;
+  }
+
+  return "";
 }
 
 function formatDate(

@@ -4,10 +4,16 @@ import Link from "next/link";
 
 export default async function InvoicePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{
+    error?: string;
+    success?: string;
+  }>;
 }) {
   const { id } = await params;
+  const query = await searchParams;
 
   const supabase = await createClient();
 
@@ -48,25 +54,52 @@ export default async function InvoicePage({
   async function markSent() {
     "use server";
 
-    const supabase =
-      await createClient();
+    const supabase = await createClient();
 
-    const { error } =
-      await supabase
-        .from("invoices")
-        .update({
-          status: "sent",
-        })
-        .eq("id", id);
+    const {
+      data: currentInvoice,
+      error: fetchError,
+    } = await supabase
+      .from("invoices")
+      .select("status")
+      .eq("id", id)
+      .single();
+
+    if (fetchError || !currentInvoice) {
+      redirect(
+        `/dashboard/invoices/${id}?error=${encodeURIComponent(
+          "Unable to load this invoice."
+        )}`
+      );
+    }
+
+    if (currentInvoice.status !== "draft") {
+      redirect(
+        `/dashboard/invoices/${id}?error=${encodeURIComponent(
+          "Only draft invoices can be marked as sent."
+        )}`
+      );
+    }
+
+    const { error } = await supabase
+      .from("invoices")
+      .update({
+        status: "sent",
+      })
+      .eq("id", id);
 
     if (error) {
-      throw new Error(
-        error.message
+      redirect(
+        `/dashboard/invoices/${id}?error=${encodeURIComponent(
+          "Could not mark the invoice as sent. Please try again."
+        )}`
       );
     }
 
     redirect(
-      `/dashboard/invoices/${id}`
+      `/dashboard/invoices/${id}?success=${encodeURIComponent(
+        "Invoice marked as sent."
+      )}`
     );
   }
 
@@ -74,40 +107,181 @@ export default async function InvoicePage({
     formData: FormData
   ) {
     "use server";
-  
-    const supabase =
-      await createClient();
-  
+
+    const supabase = await createClient();
+
     const paymentMethod =
-      formData.get(
-        "payment_method"
-      ) as string;
-  
-    const { error } =
-      await supabase
-        .from("invoices")
-        .update({
-          status: "paid",
-          paid_at:
-            new Date().toISOString(),
-          payment_method:
-            paymentMethod || null,
-        })
-        .eq("id", id);
-  
-    if (error) {
-      throw new Error(
-        error.message
+      String(
+        formData.get(
+          "payment_method"
+        ) ?? ""
+      ).trim();
+
+    const allowedPaymentMethods = [
+      "cash",
+      "card",
+      "check",
+      "zelle",
+      "other",
+    ];
+
+    if (
+      !allowedPaymentMethods.includes(
+        paymentMethod
+      )
+    ) {
+      redirect(
+        `/dashboard/invoices/${id}?error=${encodeURIComponent(
+          "Please select a valid payment method."
+        )}`
       );
     }
-  
+
+    const {
+      data: currentInvoice,
+      error: fetchError,
+    } = await supabase
+      .from("invoices")
+      .select("status")
+      .eq("id", id)
+      .single();
+
+    if (fetchError || !currentInvoice) {
+      redirect(
+        `/dashboard/invoices/${id}?error=${encodeURIComponent(
+          "Unable to load this invoice."
+        )}`
+      );
+    }
+
+    if (
+      currentInvoice.status === "paid"
+    ) {
+      redirect(
+        `/dashboard/invoices/${id}?error=${encodeURIComponent(
+          "This invoice is already marked as paid."
+        )}`
+      );
+    }
+
+    if (
+      currentInvoice.status ===
+      "cancelled"
+    ) {
+      redirect(
+        `/dashboard/invoices/${id}?error=${encodeURIComponent(
+          "A cancelled invoice cannot be marked as paid."
+        )}`
+      );
+    }
+
+    const { error } = await supabase
+      .from("invoices")
+      .update({
+        status: "paid",
+        paid_at:
+          new Date().toISOString(),
+        payment_method:
+          paymentMethod,
+      })
+      .eq("id", id);
+
+    if (error) {
+      redirect(
+        `/dashboard/invoices/${id}?error=${encodeURIComponent(
+          "Could not mark the invoice as paid. Please try again."
+        )}`
+      );
+    }
+
     redirect(
-      `/dashboard/invoices/${id}`
+      `/dashboard/invoices/${id}?success=${encodeURIComponent(
+        "Invoice marked as paid."
+      )}`
+    );
+  }
+
+  async function cancelInvoice() {
+    "use server";
+
+    const supabase = await createClient();
+
+    const {
+      data: currentInvoice,
+      error: fetchError,
+    } = await supabase
+      .from("invoices")
+      .select("status")
+      .eq("id", id)
+      .single();
+
+    if (fetchError || !currentInvoice) {
+      redirect(
+        `/dashboard/invoices/${id}?error=${encodeURIComponent(
+          "Unable to load this invoice."
+        )}`
+      );
+    }
+
+    if (
+      currentInvoice.status === "paid"
+    ) {
+      redirect(
+        `/dashboard/invoices/${id}?error=${encodeURIComponent(
+          "Paid invoices cannot be cancelled."
+        )}`
+      );
+    }
+
+    if (
+      currentInvoice.status ===
+      "cancelled"
+    ) {
+      redirect(
+        `/dashboard/invoices/${id}?error=${encodeURIComponent(
+          "This invoice is already cancelled."
+        )}`
+      );
+    }
+
+    const { error } = await supabase
+      .from("invoices")
+      .update({
+        status: "cancelled",
+        paid_at: null,
+        payment_method: null,
+      })
+      .eq("id", id);
+
+    if (error) {
+      redirect(
+        `/dashboard/invoices/${id}?error=${encodeURIComponent(
+          "Could not cancel the invoice. Please try again."
+        )}`
+      );
+    }
+
+    redirect(
+      `/dashboard/invoices/${id}?success=${encodeURIComponent(
+        "Invoice cancelled."
+      )}`
     );
   }
 
   return (
     <div className="mx-auto max-w-3xl">
+      {query.error && (
+        <div className="mb-5 rounded-xl border border-red-900/60 bg-red-950/30 px-4 py-3 text-sm text-red-300">
+          {query.error}
+        </div>
+      )}
+
+      {query.success && (
+        <div className="mb-5 rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-sm text-zinc-300">
+          {query.success}
+        </div>
+      )}
+
       {/* Header */}
       <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
@@ -127,26 +301,35 @@ export default async function InvoicePage({
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-start gap-2">
+          {invoice.status !== "cancelled" && (
+            <Link
+              href={`/dashboard/invoices/${invoice.id}/edit`}
+              className="inline-flex h-11 items-center rounded-xl border border-zinc-700 px-4 text-sm font-medium transition hover:bg-zinc-800"
+            >
+              Edit
+            </Link>
+          )}
+
             <Link
                 href={`/dashboard/invoices/${invoice.id}/print`}
-                className="rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
+                className="inline-flex h-11 items-center rounded-xl bg-white px-4 text-sm font-semibold text-black transition hover:bg-zinc-200"
             >
                 View Invoice
             </Link>
 
             <Link
                 href={`/dashboard/jobs/${invoice.job_id}`}
-                className="rounded-xl border border-zinc-700 px-4 py-2.5 text-sm font-medium transition hover:bg-zinc-800"
+                className="inline-flex h-11 items-center rounded-xl border border-zinc-700 px-4 text-sm font-medium transition hover:bg-zinc-800"
             >
                 View Job
             </Link>
-            </div>
+        </div>
       </div>
 
       <div className="space-y-6">
         {/* Amount */}
-        <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+        <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 sm:p-6">
           <p className="text-sm text-zinc-500">
             Amount
           </p>
@@ -180,7 +363,7 @@ export default async function InvoicePage({
         </section>
 
         {/* Customer */}
-        <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+        <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 sm:p-6">
           <h2 className="text-lg font-semibold">
             Customer
           </h2>
@@ -212,7 +395,7 @@ export default async function InvoicePage({
         </section>
 
         {/* Service */}
-        <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+        <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 sm:p-6">
           <h2 className="text-lg font-semibold">
             Service
           </h2>
@@ -259,7 +442,7 @@ export default async function InvoicePage({
         </section>
 
         {invoice.notes && (
-          <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+          <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 sm:p-6">
             <h2 className="text-lg font-semibold">
               Notes
             </h2>
@@ -271,105 +454,121 @@ export default async function InvoicePage({
         )}
 
         {/* Actions */}
-        <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
-            <h2 className="text-lg font-semibold">
-                Invoice Status
-            </h2>
+        <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 sm:p-6">
+          <h2 className="text-lg font-semibold">
+            Invoice Status
+          </h2>
 
-            {invoice.status !== "paid" ? (
-                <div className="mt-5 space-y-4">
-                {invoice.status === "draft" && (
-                    <form action={markSent}>
-                    <button
-                        type="submit"
-                        className="w-full rounded-xl border border-zinc-700 px-5 py-3 font-semibold transition hover:bg-zinc-800"
-                    >
-                        Mark Sent
-                    </button>
-                    </form>
-                )}
-
-                <form
-                    action={markPaid}
-                    className="space-y-4"
-                >
-                    <div>
-                    <label className="mb-2 block text-sm font-medium">
-                        Payment Method
-                    </label>
-
-                    <select
-                        name="payment_method"
-                        required
-                        defaultValue=""
-                        className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 outline-none transition focus:border-zinc-500"
-                    >
-                        <option
-                        value=""
-                        disabled
-                        >
-                        Select payment method
-                        </option>
-
-                        <option value="cash">
-                        Cash
-                        </option>
-
-                        <option value="card">
-                        Card
-                        </option>
-
-                        <option value="check">
-                        Check
-                        </option>
-
-                        <option value="zelle">
-                        Zelle
-                        </option>
-
-                        <option value="other">
-                        Other
-                        </option>
-                    </select>
-                    </div>
-
-                    <button
+          {invoice.status !== "paid" &&
+          invoice.status !== "cancelled" ? (
+            <div className="mt-5 space-y-4">
+              {invoice.status === "draft" && (
+                <form action={markSent}>
+                  <button
                     type="submit"
-                    className="w-full rounded-xl bg-white px-5 py-3 font-semibold text-black transition hover:bg-zinc-200"
-                    >
-                    Mark Paid
-                    </button>
+                    className="w-full rounded-xl border border-zinc-700 px-5 py-3 font-semibold transition hover:bg-zinc-800"
+                  >
+                    Mark Sent
+                  </button>
                 </form>
-                </div>
-            ) : (
-                <div className="mt-5 rounded-xl border border-zinc-800 bg-zinc-950 p-4">
-                <div className="grid gap-4 sm:grid-cols-2">
-                    <Detail
-                    label="Paid"
-                    value={
-                        invoice.paid_at
-                        ? formatDateTime(
-                            new Date(
-                                invoice.paid_at
-                            )
-                            )
-                        : null
-                    }
-                    />
+              )}
 
-                    <Detail
-                    label="Payment Method"
-                    value={
-                        invoice.payment_method
-                        ? formatPaymentMethod(
-                            invoice.payment_method
-                            )
-                        : null
-                    }
-                    />
+              <form
+                action={markPaid}
+                className="space-y-4"
+              >
+                <div>
+                  <label className="mb-2 block text-sm font-medium">
+                    Payment Method
+                  </label>
+
+                  <select
+                    name="payment_method"
+                    required
+                    defaultValue=""
+                    className="w-full rounded-xl border border-zinc-700 bg-zinc-950 px-4 py-3 outline-none transition focus:border-zinc-500"
+                  >
+                    <option
+                      value=""
+                      disabled
+                    >
+                      Select payment method
+                    </option>
+
+                    <option value="cash">
+                      Cash
+                    </option>
+
+                    <option value="card">
+                      Card
+                    </option>
+
+                    <option value="check">
+                      Check
+                    </option>
+
+                    <option value="zelle">
+                      Zelle
+                    </option>
+
+                    <option value="other">
+                      Other
+                    </option>
+                  </select>
                 </div>
+
+                <button
+                  type="submit"
+                  className="w-full rounded-xl bg-white px-5 py-3 font-semibold text-black transition hover:bg-zinc-200"
+                >
+                  Mark Paid
+                </button>
+              </form>
+
+              <form action={cancelInvoice}>
+                <button
+                  type="submit"
+                  className="w-full rounded-xl border border-red-900/60 px-5 py-3 font-semibold text-red-400 transition hover:bg-red-950/30"
+                >
+                  Cancel Invoice
+                </button>
+              </form>
             </div>
-            )}
+          ) : invoice.status === "paid" ? (
+            <div className="mt-5 rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Detail
+                  label="Paid"
+                  value={
+                    invoice.paid_at
+                      ? formatDateTime(
+                          new Date(
+                            invoice.paid_at
+                          )
+                        )
+                      : null
+                  }
+                />
+
+                <Detail
+                  label="Payment Method"
+                  value={
+                    invoice.payment_method
+                      ? formatPaymentMethod(
+                          invoice.payment_method
+                        )
+                      : null
+                  }
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="mt-5 rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+              <p className="text-sm text-zinc-400">
+                This invoice has been cancelled.
+              </p>
+            </div>
+          )}
         </section>
       </div>
     </div>
