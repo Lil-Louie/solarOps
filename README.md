@@ -1,6 +1,4 @@
-from pathlib import Path
-
-readme = """# SolarOps
+# SolarOps
 
 SolarOps is a full-stack operations management application built to help Chico solar cleaning manage day-to-day jobs, customers, invoices, payments, costs, materials, and business performance from one place.
 
